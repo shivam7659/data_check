@@ -1,16 +1,19 @@
 name: PR Config Analyzer
 on:
   pull_request:
-    types: [opened, synchronize]  # Triggers when PR is created or updated
+    types: [opened, synchronize]
 
 jobs:
   analyze-configs:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
       with:
-        fetch-depth: 0  # Needed for proper git diff
+        fetch-depth: 0
     
     - name: Set up Python
       uses: actions/setup-python@v4
@@ -22,6 +25,7 @@ jobs:
     
     - name: Run PR analyzer
       env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         PR_URL: ${{ github.event.pull_request.html_url }}
       run: |
         python - <<'EOF'
@@ -31,15 +35,25 @@ jobs:
         from typing import Dict, List, Optional, Tuple
 
         def extract_repo_info(pr_url: str) -> Tuple[str, str, int]:
-            """Extract owner, repo, and PR number from GitHub URL"""
             pattern = r"github\.com/([^/]+)/([^/]+)/pull/(\d+)"
             match = re.search(pattern, pr_url)
             if not match:
-                raise ValueError("Invalid GitHub PR URL format")
+                raise ValueError(f"Invalid GitHub PR URL format: {pr_url}")
             return match.group(1), match.group(2), int(match.group(3))
 
+        def get_pr_details(owner: str, repo: str, pr_number: int) -> Dict:
+            url = f"https://api.github.com/repos/{owner}/{repo}/pulls/{pr_number}"
+            response = requests.get(
+                url,
+                headers={
+                    "Accept": "application/vnd.github.v3+json",
+                    "Authorization": f"Bearer {os.getenv('GITHUB_TOKEN')}"
+                }
+            )
+            response.raise_for_status()
+            return response.json()
+
         def get_pr_changed_files(owner: str, repo: str, pr_number: int) -> List[Dict[str, str]]:
-            """Get list of files changed in the PR"""
             url = f"https://api.github.com/repos/{owner}/{repo}/pulls/{pr_number}/files"
             response = requests.get(
                 url,
@@ -51,9 +65,8 @@ jobs:
             response.raise_for_status()
             return response.json()
 
-        def get_file_contents(owner: str, repo: str, ref: str, file_path: str) -> Optional[str]:
-            """Get content of a specific file"""
-            url = f"https://api.github.com/repos/{owner}/{repo}/contents/{file_path}?ref={ref}"
+        def get_file_content(owner: str, repo: str, ref: str, path: str) -> Optional[str]:
+            url = f"https://api.github.com/repos/{owner}/{repo}/contents/{path}?ref={ref}"
             response = requests.get(
                 url,
                 headers={
@@ -66,41 +79,46 @@ jobs:
             response.raise_for_status()
             return response.text
 
-        def analyze_pr(pr_url: str):
-            """Main analysis function"""
-            owner, repo, pr_number = extract_repo_info(pr_url)
+        def main():
+            pr_url = os.getenv('PR_URL')
+            if not pr_url:
+                raise ValueError("PR_URL environment variable not set")
             
-            # Get PR details
-            pr_details = requests.get(
-                f"https://api.github.com/repos/{owner}/{repo}/pulls/{pr_number}",
-                headers={
-                    "Accept": "application/vnd.github.v3+json",
-                    "Authorization": f"Bearer {os.getenv('GITHUB_TOKEN')}"
-                }
-            ).json()
-            
-            base_ref = pr_details['base']['ref']
-            head_ref = pr_details['head']['ref']
-            
-            # Get changed files
-            changed_files = get_pr_changed_files(owner, repo, pr_number)
-            
-            # Analyze each changed file
-            for file in changed_files:
-                filename = file['filename']
-                if not filename.endswith(('.json', '.yaml', '.yml', '.ini')):  # Filter config files
-                    continue
+            try:
+                owner, repo, pr_number = extract_repo_info(pr_url)
+                pr_details = get_pr_details(owner, repo, pr_number)
                 
-                main_content = get_file_contents(owner, repo, base_ref, filename)
-                pr_content = get_file_contents(owner, repo, head_ref, filename)
+                # Safely get branch references
+                base_ref = pr_details.get('base', {}).get('ref')
+                head_ref = pr_details.get('head', {}).get('ref')
                 
-                # Your custom analysis here
-                print(f"\nAnalyzing {filename}:")
-                print(f"Main branch content:\n{main_content[:200]}..." if main_content else "File added in PR")
-                print(f"PR branch content:\n{pr_content[:200]}..." if pr_content else "File removed in PR")
+                if not base_ref or not head_ref:
+                    raise ValueError("Could not determine branch references")
+                
+                print(f"Analyzing PR #{pr_number}: {head_ref} → {base_ref}")
+                
+                changed_files = get_pr_changed_files(owner, repo, pr_number)
+                for file in changed_files:
+                    filename = file['filename']
+                    if not any(filename.endswith(ext) for ext in ('.json', '.yaml', '.yml', '.ini')):
+                        continue
+                    
+                    print(f"\nAnalyzing {filename}:")
+                    main_content = get_file_content(owner, repo, base_ref, filename)
+                    pr_content = get_file_content(owner, repo, head_ref, filename)
+                    
+                    if main_content is None:
+                        print("→ File added in PR branch")
+                    elif pr_content is None:
+                        print("→ File removed in PR branch")
+                    else:
+                        print("→ File modified")
+                        # Add your custom comparison logic here
+
+            except Exception as e:
+                print(f"Error: {str(e)}")
+                raise
 
         if __name__ == "__main__":
-            pr_url = os.getenv('PR_URL')
-            print(f"Analyzing PR: {pr_url}")
-            analyze_pr(pr_url)
+            main()
         EOF
