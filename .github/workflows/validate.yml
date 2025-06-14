@@ -40,7 +40,7 @@ jobs:
             print(f"Analyzing PR #{pr.number}: {pr.head.ref} → {pr.base.ref}")
             
             for file in pr.get_files():
-                if not any(file.filename.endswith(ext) for ext in ('.json', '.yaml', '.yml', '.ini')):
+                if not any(file.filename.endswith(ext) for ext in ('.json', '.yaml', '.yml', '.ini','.txt')):
                     continue
                 
                 print(f"\nAnalyzing {file.filename}:")
