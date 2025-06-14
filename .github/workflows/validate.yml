@@ -21,104 +21,51 @@ jobs:
         python-version: '3.10'
     
     - name: Install dependencies
-      run: pip install requests
+      run: pip install requests pygithub
     
     - name: Run PR analyzer
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        PR_URL: ${{ github.event.pull_request.html_url }}
       run: |
         python - <<'EOF'
         import os
-        import re
-        import requests
-        from typing import Dict, List, Optional, Tuple
-
-        def extract_repo_info(pr_url: str) -> Tuple[str, str, int]:
-            pattern = r"github\.com/([^/]+)/([^/]+)/pull/(\d+)"
-            match = re.search(pattern, pr_url)
-            if not match:
-                raise ValueError(f"Invalid GitHub PR URL format: {pr_url}")
-            return match.group(1), match.group(2), int(match.group(3))
-
-        def get_pr_details(owner: str, repo: str, pr_number: int) -> Dict:
-            url = f"https://api.github.com/repos/{owner}/{repo}/pulls/{pr_number}"
-            response = requests.get(
-                url,
-                headers={
-                    "Accept": "application/vnd.github.v3+json",
-                    "Authorization": f"Bearer {os.getenv('GITHUB_TOKEN')}"
-                }
-            )
-            response.raise_for_status()
-            return response.json()
-
-        def get_pr_changed_files(owner: str, repo: str, pr_number: int) -> List[Dict[str, str]]:
-            url = f"https://api.github.com/repos/{owner}/{repo}/pulls/{pr_number}/files"
-            response = requests.get(
-                url,
-                headers={
-                    "Accept": "application/vnd.github.v3+json",
-                    "Authorization": f"Bearer {os.getenv('GITHUB_TOKEN')}"
-                }
-            )
-            response.raise_for_status()
-            return response.json()
-
-        def get_file_content(owner: str, repo: str, ref: str, path: str) -> Optional[str]:
-            url = f"https://api.github.com/repos/{owner}/{repo}/contents/{path}?ref={ref}"
-            response = requests.get(
-                url,
-                headers={
-                    "Accept": "application/vnd.github.v3.raw",
-                    "Authorization": f"Bearer {os.getenv('GITHUB_TOKEN')}"
-                }
-            )
-            if response.status_code == 404:
-                return None
-            response.raise_for_status()
-            return response.text
-
+        from github import Github
+        
         def main():
-            pr_url = os.getenv('PR_URL')
-            if not pr_url:
-                raise ValueError("PR_URL environment variable not set")
+            g = Github(os.getenv('GITHUB_TOKEN'))
+            repo = g.get_repo(os.getenv('GITHUB_REPOSITORY'))
+            pr_number = int(os.getenv('GITHUB_REF').split('/')[2])
+            pr = repo.get_pull(pr_number)
             
-            try:
-                owner, repo, pr_number = extract_repo_info(pr_url)
-                pr_details = get_pr_details(owner, repo, pr_number)
+            print(f"Analyzing PR #{pr.number}: {pr.head.ref} → {pr.base.ref}")
+            
+            for file in pr.get_files():
+                if not any(file.filename.endswith(ext) for ext in ('.json', '.yaml', '.yml', '.ini')):
+                    continue
                 
-                # Safely get branch references
-                base_ref = pr_details.get('base', {}).get('ref')
-                head_ref = pr_details.get('head', {}).get('ref')
+                print(f"\nAnalyzing {file.filename}:")
+                print(f"Status: {file.status}")
+                print(f"Changes: +{file.additions}, -{file.deletions}")
                 
-                if not base_ref or not head_ref:
-                    raise ValueError("Could not determine branch references")
-                
-                print(f"Analyzing PR #{pr_number}: {head_ref} → {base_ref}")
-                
-                changed_files = get_pr_changed_files(owner, repo, pr_number)
-                for file in changed_files:
-                    filename = file['filename']
-                    if not any(filename.endswith(ext) for ext in ('.json', '.yaml', '.yml', '.ini')):
-                        continue
+                try:
+                    base_content = repo.get_contents(file.filename, ref=pr.base.ref).decoded_content.decode()
+                    head_content = repo.get_contents(file.filename, ref=pr.head.ref).decoded_content.decode()
                     
-                    print(f"\nAnalyzing {filename}:")
-                    main_content = get_file_content(owner, repo, base_ref, filename)
-                    pr_content = get_file_content(owner, repo, head_ref, filename)
+                    # Your custom analysis here
+                    print("File contents available for comparison")
+                    print(f"Base content length: {len(base_content)}")
+                    print(f"Head content length: {len(head_content)}")
                     
-                    if main_content is None:
-                        print("→ File added in PR branch")
-                    elif pr_content is None:
-                        print("→ File removed in PR branch")
+                except Exception as e:
+                    if "404" in str(e):
+                        print("File not found in one branch (likely added/removed)")
                     else:
-                        print("→ File modified")
-                        # Add your custom comparison logic here
-
-            except Exception as e:
-                print(f"Error: {str(e)}")
-                raise
+                        print(f"Error comparing: {str(e)}")
 
         if __name__ == "__main__":
-            main()
+            try:
+                main()
+            except Exception as e:
+                print(f"Critical error: {str(e)}")
+                raise
         EOF
