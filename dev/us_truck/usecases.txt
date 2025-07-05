@@ -1,0 +1,17 @@
+name1 = {
+    type = "fruit"
+    color = "red"
+    id = ["1", "2", "2233", "345", "567","00"]
+}
+
+name2 = {
+    type = "vehicle"
+    brand = "Toyota"
+    id = ["11", "22", "3344", "5566"]
+}
+
+name3 = {
+    type = "book"
+    genre = "fiction"
+    id = ["101", "202", "303", "404"]
+}
