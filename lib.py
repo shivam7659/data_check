@@ -1,3 +1,9 @@
+import os
+with open('usecase.conf', 'r') as file:
+    content = file.read()
+    print(content)
+
+os.system('git checkout main')
 with open('usecase.conf', 'r') as file:
     content = file.read()
     print(content)
